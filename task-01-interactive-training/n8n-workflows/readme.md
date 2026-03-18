@@ -1,0 +1,149 @@
+# Workflow для n8n
+
+## Импорт workflow
+
+1. Откройте n8n
+2. Нажмите "Import from File"
+3. Выберите файл `crm-test-workflow.json`
+4. Настройте credentials:
+   - Telegram Bot Token
+   - Google Sheets API (если используете)
+
+## Структура workflow
+Webhook (от Google Forms)
+→ Function Node (анализ ответов)
+→ IF Node (ветвление)
+→ Success: Telegram (поздравление)
+→ Error: Telegram (рекомендации)
+→ Wait Node (пауза)
+→ Telegram (напоминание через день)
+
+## Переменные окружения
+
+Создайте в n8n следующие переменные:
+- `TELEGRAM_BOT_TOKEN` - токен вашего бота
+- `HR_CHAT_ID` - ID чата HR для отчетов
+- `KNOWLEDGE_BASE_URL` - ссылка на Notion/Confluence
+
+## Тестирование
+
+Для тестирования отправьте POST-запрос на вебхук:
+
+```bash
+curl -X POST https://ваш-n8n/webhook/crm-test \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "test@example.com",
+    "answers": {
+      "q1": "правильный ответ",
+      "q2": "неправильный ответ"
+    }
+  }'
+
+
+  ---
+
+### Файл 5: `Dupon/task-01-interactive-training/n8n-workflows/crm-test-workflow.json`
+
+```json
+{
+  "name": "CRM Training Test Checker",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "crm-test",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Получаем данные из вебхука\nconst item = $input.first().json;\nconst email = item.email;\nconst answers = item.answers;\n\n// Эталонные ответы (в реальности берутся из базы)\nconst correctAnswers = {\n  q1: 'создать сделку',\n  q2: 'прикрепить файл',\n  q3: 'назначить ответственного'\n};\n\n// Анализируем результаты\nconst mistakes = [];\nlet correctCount = 0;\n\nfor (const [question, answer] of Object.entries(answers)) {\n  if (answer === correctAnswers[question]) {\n    correctCount++;\n  } else {\n    mistakes.push({\n      question,\n      correct: correctAnswers[question],\n      given: answer\n    });\n  }\n}\n\nconst totalQuestions = Object.keys(correctAnswers).length;\nconst score = (correctCount / totalQuestions) * 100;\nconst passed = score >= 80; // Проходной балл 80%\n\n// Формируем результат\nreturn {\n  email,\n  score,\n  passed,\n  mistakes: mistakes.length > 0 ? mistakes : null,\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "analyzer",
+      "name": "Analyze Answers",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.passed}}",
+              "operation": "equals",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "router",
+      "name": "Check Passed",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$json.email}}",
+        "text": "🎉 Поздравляю, {{$json.email}}!\n\nВы успешно прошли тест по CRM.\nРезультат: {{$json.score}}%\n\nСледующий модуль: Работа со сделками\nСсылка: https://notion.so/next-module",
+        "additionalFields": {}
+      },
+      "id": "success",
+      "name": "Send Success",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$json.email}}",
+        "text": "📚 Нужно повторить материал, {{$json.email}}!\n\nРезультат: {{$json.score}}%\n\nТемы для повторения:\n{{$json.mistakes.map(m => '❌ ' + m.question + ': правильно \"' + m.correct + '\"').join('\\n')}}\n\nСсылки на видео:\n- Создание сделки: https://youtu.be/...\n- Работа с файлами: https://youtu.be/...",
+        "additionalFields": {}
+      },
+      "id": "failure",
+      "name": "Send Retry Instructions",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [850, 400]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$env.HR_CHAT_ID}}",
+        "text": "📊 Отчет по обучению CRM\n\nСотрудник: {{$json.email}}\nРезультат: {{$json.score}}%\nСтатус: {{$json.passed ? '✅ Пройден' : '❌ Не пройден'}}\nВремя: {{$json.timestamp}}",
+        "additionalFields": {}
+      },
+      "id": "hr",
+      "name": "Notify HR",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [850, 600]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Analyze Answers", "type": "main", "index": 0 }]]
+    },
+    "Analyze Answers": {
+      "main": [[{ "node": "Check Passed", "type": "main", "index": 0 }]]
+    },
+    "Check Passed": {
+      "main": [
+        [{ "node": "Send Success", "type": "main", "index": 0 }],
+        [{ "node": "Send Retry Instructions", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send Success": {
+      "main": [[{ "node": "Notify HR", "type": "main", "index": 0 }]]
+    },
+    "Send Retry Instructions": {
+      "main": [[{ "node": "Notify HR", "type": "main", "index": 0 }]]
+    }
+  }
+}
